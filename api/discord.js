@@ -191,7 +191,7 @@ export default async function handler(req, res) {
             permission_overwrites: [{ id: i.guild_id, type: 0, deny: "1024" }, { id: APP_ID, type: 1, allow: "68608" }]
           });
         }
-        return { content: `🎫 문의 설정 ${category || staff ? "저장 완료" : "조회"}\\n카테고리: ${config.category ? "<#" + config.category + ">" : "미설정"}\\n담당 역할: ${config.staff ? "<@&" + config.staff + ">" : "미설정"}`, allowed_mentions: { parse: [] } };
+        return { content: `🎫 문의 설정 ${category || staff ? "저장 완료" : "조회"}\n카테고리: ${config.category ? "<#" + config.category + ">" : "미설정"}\n담당 역할: ${config.staff ? "<@&" + config.staff + ">" : "미설정"}`, allowed_mentions: { parse: [] } };
       });
       return reply(res, { type: 5, data: { flags: 64 } });
     }
