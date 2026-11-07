@@ -42,6 +42,24 @@ async function debateRound(topic, round) {
   const prompt = `당신은 한국어 토론 진행자입니다. 주제: "${topic}". ${round}라운드를 진행하세요. 찬성 AI와 반대 AI가 서로 상대 주장을 직접 반박하도록 하세요. 각 AI 발언 2~3문장, 전체 1200자 이내. 형식: "🟦 찬성 AI: ..." 다음 "🟥 반대 AI: ...". 현실적이고 자연스럽게 토론하세요.`;
   return gemini(prompt);
 }
+
+const PERMS = { KICK: 2n, BAN: 4n, MANAGE_MESSAGES: 8192n, MODERATE: 1099511627776n };
+function allowed(i, perm) { return (BigInt(i.member?.permissions || "0") & perm) === perm; }
+async function discordApi(path, method = "GET", body) {
+  if (!process.env.DISCORD_BOT_TOKEN) throw new Error("Vercel에 DISCORD_BOT_TOKEN을 설정해야 해요.");
+  const r = await fetch("https://discord.com/api/v10" + path, {
+    method,
+    headers: { Authorization: "Bot " + process.env.DISCORD_BOT_TOKEN, "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(12000)
+  });
+  const txt = await r.text();
+  const data = txt ? (() => { try { return JSON.parse(txt); } catch { return txt; } })() : null;
+  if (!r.ok) throw new Error("Discord API " + r.status + ": " + clip(data?.message || txt, 160));
+  return data;
+}
+function safeReason(s) { return clip(String(s || "사유 없음").replace(/[@`]/g, ""), 350); }
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
   const signature = req.headers["x-signature-ed25519"];
@@ -54,6 +72,11 @@ export default async function handler(req, res) {
     if (!verifySignature(null, Buffer.from(timestamp + raw), key, Buffer.from(signature, "hex"))) return res.status(401).send("Unauthorized");
     const i = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     if (i.type === 1) return reply(res, { type: 1 });
+    if (i.type === 3 && i.data?.custom_id?.startsWith("mod:")) {
+      if (!allowed(i, PERMS.MANAGE_MESSAGES)) return reply(res, message("메시지 관리 권한이 필요해요.", true));
+      const tips = { "mod:warn": "/경고 유저 사유 — 경고 기록", "mod:lookup": "/경고조회 유저 — 최근 경고 조회", "mod:clean": "/청소 개수 — 메시지 삭제 (1~100)", "mod:kick": "/추방 유저 사유 — 서버에서 추방", "mod:ban": "/차단 유저 사유 — 서버에서 차단" };
+      return reply(res, message(tips[i.data.custom_id] || "알 수 없는 기능이에요.", true));
+    }
     if (i.type === 3 && i.data?.custom_id?.startsWith("debate:")) {
       const topic = debateTopic(i);
       if (!topic) return reply(res, message("토론 정보를 찾을 수 없어요.", true));
@@ -78,6 +101,57 @@ export default async function handler(req, res) {
       if (!topic) return reply(res, message("토론 주제를 입력해 줘.", true));
       background(i, async () => ({ embeds: [{ title: `🧀 AI 토론: ${clip(topic, 180)}`, description: await debateRound(topic, 1), color: 0xF1C40F, footer: { text: "라운드 1" } }], components: debateButtons() }));
       return reply(res, { type: 5 });
+    }
+    if (["경고", "경고조회", "추방", "차단", "청소", "관리패널"].includes(name)) {
+      if (!i.guild_id) return reply(res, message("서버에서만 사용할 수 있어요.", true));
+      const need = ["추방"].includes(name) ? PERMS.KICK : name === "차단" ? PERMS.BAN : PERMS.MANAGE_MESSAGES;
+      if (!allowed(i, need)) return reply(res, message("이 명령어를 사용할 권한이 없어요.", true));
+      if (name === "관리패널") {
+        return reply(res, { type: 4, data: { embeds: [{ title: "🛡️ 취즈단봇v2 관리패널", description: "버튼을 누르면 해당 관리 명령어 사용법을 보여줘요. 실제 조치는 슬래시 명령어에서 실행해요.", color: 0x3498db }], components: [{ type: 1, components: [
+          { type: 2, style: 2, label: "경고", custom_id: "mod:warn" },
+          { type: 2, style: 2, label: "경고조회", custom_id: "mod:lookup" },
+          { type: 2, style: 2, label: "청소", custom_id: "mod:clean" },
+          { type: 2, style: 4, label: "추방", custom_id: "mod:kick" },
+          { type: 2, style: 4, label: "차단", custom_id: "mod:ban" }
+        ] }] } });
+      }
+      if (name === "청소") {
+        const count = Number(option(i, "개수"));
+        if (!Number.isInteger(count) || count < 1 || count > 100) return reply(res, message("삭제 개수는 1~100 사이로 입력해 줘.", true));
+        background(i, async () => {
+          const msgs = await discordApi(`/channels/${i.channel_id}/messages?limit=${count}`);
+          const recent = msgs.filter(m => Date.now() - Number(BigInt(m.id) >> 22n) - 1420070400000 < 14 * 86400000);
+          if (recent.length >= 2) await discordApi(`/channels/${i.channel_id}/messages/bulk-delete`, "POST", { messages: recent.map(m => m.id) });
+          else if (recent.length === 1) await discordApi(`/channels/${i.channel_id}/messages/${recent[0].id}`, "DELETE");
+          return { content: `🧹 ${recent.length}개 메시지 삭제 완료. (14일 이상 된 메시지는 제외)` };
+        });
+        return reply(res, { type: 5, data: { flags: 64 } });
+      }
+      const userId = option(i, "유저");
+      if (!/^\d{15,22}$/.test(String(userId || ""))) return reply(res, message("대상 유저를 선택해 줘.", true));
+      if (userId === i.member?.user?.id && name !== "경고조회") return reply(res, message("자기 자신에게는 사용할 수 없어요.", true));
+      const reason = safeReason(option(i, "사유"));
+      if (name === "경고" || name === "경고조회") {
+        if (!process.env.WARNING_LOG_CHANNEL_ID) return reply(res, message("Vercel 환경변수 WARNING_LOG_CHANNEL_ID에 경고 기록용 채널 ID를 설정해 줘.", true));
+        background(i, async () => {
+          const channel = process.env.WARNING_LOG_CHANNEL_ID;
+          if (name === "경고") {
+            const log = `[CHIJU_WARN] guild=${i.guild_id} user=${userId} mod=${i.member.user.id} at=${new Date().toISOString()} reason=${reason}`;
+            await discordApi(`/channels/${channel}/messages`, "POST", { content: log, allowed_mentions: { parse: [] } });
+            return { content: `⚠️ <@${userId}> 경고 기록 완료. 사유: ${reason}`, allowed_mentions: { parse: [] } };
+          }
+          const logs = await discordApi(`/channels/${channel}/messages?limit=100`);
+          const hits = logs.filter(m => m.author?.bot && m.content?.startsWith(`[CHIJU_WARN] guild=${i.guild_id} user=${userId} `));
+          return { content: `📋 <@${userId}> 최근 경고 ${hits.length}건 (최근 로그 100개 기준)\n` + (hits.length ? hits.slice(0, 10).map(m => "• " + clip(m.content.split(" reason=").slice(1).join(" reason="), 140)).join("\n") : "기록 없음"), allowed_mentions: { parse: [] } };
+        });
+        return reply(res, { type: 5, data: { flags: 64 } });
+      }
+      background(i, async () => {
+        if (name === "추방") await discordApi(`/guilds/${i.guild_id}/members/${userId}`, "DELETE");
+        if (name === "차단") await discordApi(`/guilds/${i.guild_id}/bans/${userId}`, "PUT", { delete_message_seconds: 0 });
+        return { content: `✅ <@${userId}> ${name} 완료. 사유: ${reason}`, allowed_mentions: { parse: [] } };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
     }
     return reply(res, message("이 명령어는 아직 구현 중이에요.", true));
   } catch (e) { console.error("Discord interaction error", e); return res.status(400).send("Invalid request"); }
