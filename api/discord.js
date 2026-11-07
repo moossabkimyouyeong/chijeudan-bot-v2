@@ -120,7 +120,7 @@ export default async function handler(req, res) {
         if (!Number.isInteger(count) || count < 1 || count > 100) return reply(res, message("삭제 개수는 1~100 사이로 입력해 줘.", true));
         background(i, async () => {
           const msgs = await discordApi(`/channels/${i.channel_id}/messages?limit=${count}`);
-          const recent = msgs.filter(m => Date.now() - Number(BigInt(m.id) >> 22n) - 1420070400000 < 14 * 86400000);
+          const recent = msgs.filter(m => Date.now() - (Number(BigInt(m.id) >> 22n) + 1420070400000) < 14 * 86400000);
           if (recent.length >= 2) await discordApi(`/channels/${i.channel_id}/messages/bulk-delete`, "POST", { messages: recent.map(m => m.id) });
           else if (recent.length === 1) await discordApi(`/channels/${i.channel_id}/messages/${recent[0].id}`, "DELETE");
           return { content: `🧹 ${recent.length}개 메시지 삭제 완료. (14일 이상 된 메시지는 제외)` };
