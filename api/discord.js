@@ -72,6 +72,44 @@ export default async function handler(req, res) {
     if (!verifySignature(null, Buffer.from(timestamp + raw), key, Buffer.from(signature, "hex"))) return res.status(401).send("Unauthorized");
     const i = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     if (i.type === 1) return reply(res, { type: 1 });
+
+    if (i.type === 3 && i.data?.custom_id === "ticket:open") {
+      if (!i.guild_id) return reply(res, message("서버에서만 사용할 수 있어요.", true));
+      background(i, async () => {
+        const uid = i.member?.user?.id || i.user?.id;
+        if (!uid) throw new Error("사용자 정보를 찾을 수 없어요.");
+        const existing = await discordApi(`/guilds/${i.guild_id}/channels`);
+        const old = existing.find(c => c.type === 0 && c.topic === `CHIJU_TICKET:${uid}`);
+        if (old) return { content: `이미 열린 티켓이 있어요: <#${old.id}>`, allowed_mentions: { parse: [] } };
+        const channel = await discordApi(`/guilds/${i.guild_id}/channels`, "POST", {
+          name: `ticket-${uid.slice(-6)}`, type: 0, topic: `CHIJU_TICKET:${uid}`,
+          permission_overwrites: [
+            { id: i.guild_id, type: 0, deny: "1024" },
+            { id: uid, type: 1, allow: "3072" },
+            { id: APP_ID, type: 1, allow: "3072" }
+          ]
+        });
+        await discordApi(`/channels/${channel.id}/messages`, "POST", {
+          content: `<@${uid}> 문의 내용을 남겨주세요. 관리자도 이 채널을 확인할 수 있어요.`,
+          allowed_mentions: { users: [uid] },
+          components: [{ type: 1, components: [{ type: 2, style: 4, label: "티켓 닫기", custom_id: "ticket:close" }] }]
+        });
+        return { content: `티켓이 열렸어요: <#${channel.id}>`, allowed_mentions: { parse: [] } };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
+    }
+    if (i.type === 3 && i.data?.custom_id === "ticket:close") {
+      if (!i.guild_id) return reply(res, message("서버에서만 사용할 수 있어요.", true));
+      background(i, async () => {
+        const channel = await discordApi(`/channels/${i.channel_id}`);
+        const owner = channel.topic?.match(/^CHIJU_TICKET:(\\d+)$/)?.[1];
+        if (!owner) return { content: "이 채널은 티켓 채널이 아니에요." };
+        if (owner !== i.member?.user?.id && !allowed(i, 16n)) return { content: "티켓 작성자 또는 채널 관리 권한이 필요해요." };
+        await discordApi(`/channels/${i.channel_id}`, "DELETE");
+        return { content: "티켓을 닫았어요." };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
+    }
     if (i.type === 3 && i.data?.custom_id?.startsWith("mod:")) {
       if (!allowed(i, PERMS.MANAGE_MESSAGES)) return reply(res, message("메시지 관리 권한이 필요해요.", true));
       const tips = { "mod:warn": "/경고 유저 사유 — 경고 기록", "mod:lookup": "/경고조회 유저 — 최근 경고 조회", "mod:clean": "/청소 개수 — 메시지 삭제 (1~100)", "mod:kick": "/추방 유저 사유 — 서버에서 추방", "mod:ban": "/차단 유저 사유 — 서버에서 차단" };
@@ -90,6 +128,13 @@ export default async function handler(req, res) {
     if (i.type !== 2) return reply(res, message("지원하지 않는 요청이에요.", true));
     const name = i.data?.name;
     if (name === "도움말") return reply(res, { type: 4, data: { embeds: [{ title: "🧀 취즈단봇v2", description: "AI 채팅 · AI 토론 · 서버 관리 · 문의 · 편의 기능\n\n/ai 질문 — Gemini 대화\n/토론 시작 — AI 토론 시작\n토론 메시지의 버튼으로 다음 라운드 또는 종료", color: 0xF1C40F }] } });
+    if (name === "문의패널") {
+      if (!i.guild_id || !allowed(i, 16n)) return reply(res, message("서버의 채널 관리 권한이 필요해요.", true));
+      return reply(res, { type: 4, data: {
+        embeds: [{ title: "🎫 취즈단 문의센터", description: "아래 버튼을 눌러 비공개 문의 티켓을 열어주세요.", color: 0xF1C40F }],
+        components: [{ type: 1, components: [{ type: 2, style: 1, label: "문의 티켓 열기", custom_id: "ticket:open" }] }]
+      } });
+    }
     if (name === "ai") {
       const question = option(i, "질문");
       if (!question) return reply(res, message("질문을 입력해 줘.", true));
