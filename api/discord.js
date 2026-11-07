@@ -28,10 +28,44 @@ async function updateOriginal(i, payload) {
   const r = await fetch(url, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   if (!r.ok) console.error("Discord followup failed:", r.status, (await r.text()).slice(0, 300));
 }
+
+const LOG_CHANNEL_ID = process.env.BOT_USAGE_LOG_CHANNEL_ID;
+function actionName(i) {
+  if (i.type === 2) return "/" + String(i.data?.name || "unknown").slice(0, 40);
+  if (i.type === 3 || i.type === 5) {
+    const id = String(i.data?.custom_id || "");
+    if (id.startsWith("verify:claim:")) return "인증 버튼";
+    const actions = { "ticket:open": "티켓 생성 버튼", "ticket:close": "티켓 종료 버튼", "ticket:settings": "티켓 설정 저장", "debate:next": "토론 다음 라운드", "debate:end": "토론 종료" };
+    return actions[id] || (id.startsWith("mod:") ? "관리 버튼" : "기타 버튼");
+  }
+  return null;
+}
+async function usageLog(i, status = "요청") {
+  if (!LOG_CHANNEL_ID || !/^\d{15,22}$/.test(LOG_CHANNEL_ID) || !i.guild_id) return;
+  const action = actionName(i);
+  if (!action) return;
+  // Do not forward messages, command arguments, ticket contents, or member identifiers.
+  const embed = {
+    title: "취즈단봇 사용 로그",
+    color: status === "실패" ? 0xe74c3c : 0x3498db,
+    fields: [
+      { name: "서버 ID", value: String(i.guild_id), inline: true },
+      { name: "기능", value: action, inline: true },
+      { name: "상태", value: status, inline: true }
+    ],
+    timestamp: new Date().toISOString(),
+    footer: { text: "명령어 인자·채팅·티켓 내용은 수집하지 않음" }
+  };
+  try { await discordApi(`/channels/${LOG_CHANNEL_ID}/messages`, "POST", { embeds: [embed], allowed_mentions: { parse: [] } }); }
+  catch (e) { console.error("Usage log delivery failed:", e.message); }
+}
+function queueUsageLog(i, status) {
+  if (LOG_CHANNEL_ID && i.guild_id) waitUntil(usageLog(i, status));
+}
 function background(i, work) {
   waitUntil((async () => {
-    try { await updateOriginal(i, await work()); }
-    catch (e) { console.error("AI error", e); await updateOriginal(i, { content: "오류: " + clip(e.message, 300), components: [] }); }
+    try { await updateOriginal(i, await work()); queueUsageLog(i, "완료"); }
+    catch (e) { queueUsageLog(i, "실패"); console.error("AI error", e); await updateOriginal(i, { content: "오류: " + clip(e.message, 300), components: [] }); }
   })());
 }
 function debateTopic(i) {
@@ -81,6 +115,7 @@ export default async function handler(req, res) {
     if (!verifySignature(null, Buffer.from(timestamp + raw), key, Buffer.from(signature, "hex"))) return res.status(401).send("Unauthorized");
     const i = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     if (i.type === 1) return reply(res, { type: 1 });
+    queueUsageLog(i, "실행");
 
 
     if (i.type === 3 && i.data?.custom_id?.startsWith("verify:claim:")) {
