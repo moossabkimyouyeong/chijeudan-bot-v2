@@ -85,8 +85,8 @@ export default async function handler(req, res) {
           name: `ticket-${uid.slice(-6)}`, type: 0, topic: `CHIJU_TICKET:${uid}`,
           permission_overwrites: [
             { id: i.guild_id, type: 0, deny: "1024" },
-            { id: uid, type: 1, allow: "3072" },
-            { id: APP_ID, type: 1, allow: "3072" }
+            { id: uid, type: 1, allow: "68608" },
+            { id: APP_ID, type: 1, allow: "68608" }
           ]
         });
         await discordApi(`/channels/${channel.id}/messages`, "POST", {
@@ -102,7 +102,7 @@ export default async function handler(req, res) {
       if (!i.guild_id) return reply(res, message("서버에서만 사용할 수 있어요.", true));
       background(i, async () => {
         const channel = await discordApi(`/channels/${i.channel_id}`);
-        const owner = channel.topic?.match(/^CHIJU_TICKET:(\\d+)$/)?.[1];
+        const owner = channel.topic?.match(/^CHIJU_TICKET:(\d+)$/)?.[1];
         if (!owner) return { content: "이 채널은 티켓 채널이 아니에요." };
         if (owner !== i.member?.user?.id && !allowed(i, 16n)) return { content: "티켓 작성자 또는 채널 관리 권한이 필요해요." };
         await discordApi(`/channels/${i.channel_id}`, "DELETE");
