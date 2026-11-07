@@ -81,6 +81,25 @@ export default async function handler(req, res) {
     const i = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     if (i.type === 1) return reply(res, { type: 1 });
 
+    if (i.type === 5 && i.data?.custom_id === "ticket:settings") {
+      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("관리자만 수정할 수 있어요.", true));
+      background(i, async () => {
+        const { store, config } = await ticketConfig(i.guild_id);
+        const fields = Object.fromEntries((i.data.components || []).flatMap(r => r.components || []).map(c => [c.custom_id, c.value]));
+        config.title = clip(fields.title || "취즈단 문의센터", 200);
+        config.description = clip(fields.description || "아래 버튼을 눌러 비공개 문의 티켓을 열어주세요.", 1000);
+        config.welcome = clip(fields.welcome || "문의 내용을 남겨주세요.", 1000);
+        const topic = "CHIJU_CONFIG:" + JSON.stringify(config);
+        if (topic.length > 1024) throw new Error("설정 내용이 너무 길어요.");
+        if (store) await discordApi(`/channels/${store.id}`, "PATCH", { topic });
+        else await discordApi(`/guilds/${i.guild_id}/channels`, "POST", {
+          name: "chiju-ticket-config", type: 0, topic,
+          permission_overwrites: [{ id: i.guild_id, type: 0, deny: "1024" }, { id: APP_ID, type: 1, allow: "68608" }]
+        });
+        return { content: "문의 제목과 안내 문구를 저장했어요. 새 /문의패널부터 적용돼요." };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
+    }
     if (i.type === 3 && i.data?.custom_id === "ticket:open") {
       if (!i.guild_id) return reply(res, message("서버에서만 사용할 수 있어요.", true));
       background(i, async () => {
@@ -100,7 +119,7 @@ export default async function handler(req, res) {
           ]
         });
         await discordApi(`/channels/${channel.id}/messages`, "POST", {
-          content: `<@${uid}> 문의 내용을 남겨주세요. 관리자도 이 채널을 확인할 수 있어요.`,
+          content: `<@${uid}> ${config.welcome || "문의 내용을 남겨주세요."}`,
           allowed_mentions: { users: [uid] },
           components: [{ type: 1, components: [{ type: 2, style: 4, label: "티켓 닫기", custom_id: "ticket:close" }] }]
         });
@@ -140,6 +159,16 @@ export default async function handler(req, res) {
     if (name === "도움말") return reply(res, { type: 4, data: { embeds: [{ title: "🧀 취즈단봇v2", description: "AI 채팅 · AI 토론 · 서버 관리 · 문의 · 편의 기능\n\n/ai 질문 — Gemini 대화\n/토론 시작 — AI 토론 시작\n토론 메시지의 버튼으로 다음 라운드 또는 종료", color: 0xF1C40F }] } });
     if (name === "문의설정") {
       if (!i.guild_id || !allowed(i, 16n)) return reply(res, message("채널 관리 권한이 필요해요.", true));
+      if (!i.data?.options?.length) {
+        if (!allowed(i, 8n)) return reply(res, message("제목과 내용 변경은 관리자만 가능해요.", true));
+        const { config } = await ticketConfig(i.guild_id);
+        const field = (id, label, value, style, max) => ({ type: 1, components: [{ type: 4, custom_id: id, label, style, required: true, max_length: max, value: value || "" }] });
+        return reply(res, { type: 9, data: { custom_id: "ticket:settings", title: "문의 티켓 설정", components: [
+          field("title", "패널 제목", config.title || "취즈단 문의센터", 1, 200),
+          field("description", "패널 안내 내용", config.description || "아래 버튼을 눌러 문의해 주세요.", 2, 500),
+          field("welcome", "티켓 생성 후 안내 내용", config.welcome || "문의 내용을 남겨주세요.", 2, 500)
+        ] } });
+      }
       background(i, async () => {
         const { store, config } = await ticketConfig(i.guild_id);
         const category = option(i, "카테고리");
@@ -168,8 +197,9 @@ export default async function handler(req, res) {
     }
     if (name === "문의패널") {
       if (!i.guild_id || !allowed(i, 16n)) return reply(res, message("서버의 채널 관리 권한이 필요해요.", true));
+      const { config } = await ticketConfig(i.guild_id);
       return reply(res, { type: 4, data: {
-        embeds: [{ title: "🎫 취즈단 문의센터", description: "아래 버튼을 눌러 비공개 문의 티켓을 열어주세요.", color: 0xF1C40F }],
+        embeds: [{ title: clip(config.title || "취즈단 문의센터", 200), description: clip(config.description || "아래 버튼을 눌러 비공개 문의 티켓을 열어주세요.", 1000), color: 0xF1C40F }],
         components: [{ type: 1, components: [{ type: 2, style: 1, label: "문의 티켓 열기", custom_id: "ticket:open" }] }]
       } });
     }
