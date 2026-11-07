@@ -2,6 +2,13 @@
   "name": "chijeudan-bot-v2",
   "private": true,
   "type": "module",
-  "scripts": {"deploy": "wrangler deploy"},
-  "devDependencies": {"wrangler": "^4.0.0"}
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@vercel/functions": "^2.0.0"
+  }
 }
