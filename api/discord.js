@@ -118,6 +118,26 @@ export default async function handler(req, res) {
     queueUsageLog(i, "실행");
 
 
+    if (i.type === 5 && i.data?.custom_id === "logs:unlock") {
+      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("서버 관리자만 사용할 수 있어요.", true));
+      const supplied = i.data.components?.flatMap(row => row.components || []).find(c => c.custom_id === "password")?.value || "";
+      const expected = process.env.BOT_LOG_ADMIN_PASSWORD;
+      if (!expected) return reply(res, message("Vercel에 BOT_LOG_ADMIN_PASSWORD를 설정해 줘.", true));
+      const { timingSafeEqual } = await import("node:crypto");
+      const a = Buffer.from(supplied), b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a,b)) return reply(res, message("비밀번호가 틀렸어요.", true));
+      if (!LOG_CHANNEL_ID) return reply(res, message("BOT_USAGE_LOG_CHANNEL_ID가 설정되지 않았어요.", true));
+      background(i, async () => {
+        const entries = await discordApi(`/channels/${LOG_CHANNEL_ID}/messages?limit=15`);
+        const logs = entries.filter(m => m.author?.id === APP_ID && m.embeds?.some(e => e.title === "취즈단봇 사용 로그")).slice(0, 10);
+        return { content: logs.length ? "**최근 봇 사용 로그**\\n" + logs.map(m => {
+          const e = m.embeds.find(e => e.title === "취즈단봇 사용 로그");
+          const fields = Object.fromEntries((e.fields || []).map(f => [f.name,f.value]));
+          return `• ${clip(fields["서버 ID"],24)} | ${clip(fields["기능"],50)} | ${clip(fields["상태"],20)}`;
+        }).join("\\n") : "최근 사용 로그가 없어요.", allowed_mentions: { parse: [] } };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
+    }
     if (i.type === 3 && i.data?.custom_id?.startsWith("verify:claim:")) {
       if (!i.guild_id) return reply(res, message("서버에서만 인증할 수 있어요.", true));
       background(i, async () => {
@@ -207,6 +227,12 @@ export default async function handler(req, res) {
     const name = i.data?.name;
     if (name === "도움말") return reply(res, { type: 4, data: { embeds: [{ title: "🧀 취즈단봇v2", description: "AI 채팅 · AI 토론 · 서버 관리 · 문의 · 편의 기능\n\n/ai 질문 — Gemini 대화\n/토론 시작 — AI 토론 시작\n토론 메시지의 버튼으로 다음 라운드 또는 종료", color: 0xF1C40F }] } });
 
+    if (name === "로그관리") {
+      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("서버 관리자만 사용할 수 있어요.", true));
+      return reply(res, { type: 9, data: { custom_id: "logs:unlock", title: "봇 사용 로그 관리자 인증", components: [
+        { type: 1, components: [{ type: 4, custom_id: "password", label: "관리자 비밀번호", style: 1, min_length: 1, max_length: 100, required: true, placeholder: "비밀번호 입력" }] }
+      ] } });
+    }
     if (name === "인증설정" || name === "인증패널") {
       if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("관리자만 인증 패널을 설정할 수 있어요.", true));
       const roleId = option(i, "역할");
