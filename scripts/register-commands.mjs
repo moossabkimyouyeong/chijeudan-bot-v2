@@ -21,6 +21,7 @@ const commands = [
 {name:"차단",description:"유저 차단",options:[user(),str("사유","차단 사유",false)]},
 {name:"청소",description:"메시지 일괄 삭제",options:[integer("개수","삭제할 메시지 수")]},
 {name:"관리패널",description:"서버 관리 패널 열기"},
+{name:"로그관리",description:"관리자 비밀번호로 최근 봇 사용 로그 조회"},
 {name:"문의패널",description:"문의 티켓 패널 생성"},
 {name:"인증설정",description:"설정 채널 없이 인증 역할과 패널 생성",options:[{type:8,name:"역할",description:"인증 시 지급할 역할",required:true}]},
 {name:"인증패널",description:"설정 채널 없는 인증 패널 생성",options:[{type:8,name:"역할",description:"인증 시 지급할 역할",required:true}]},
