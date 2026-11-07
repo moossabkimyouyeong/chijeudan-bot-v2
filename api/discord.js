@@ -67,13 +67,6 @@ async function ticketConfig(guildId, channels) {
   return { list, store, config };
 }
 
-async function verificationConfig(guildId) {
-  const list = await discordApi(`/guilds/${guildId}/channels`);
-  const store = list.find(c => c.type === 0 && c.name === "chiju-verify-config" && c.topic?.startsWith("CHIJU_VERIFY:"));
-  let config = {};
-  if (store) { try { config = JSON.parse(store.topic.slice("CHIJU_VERIFY:".length)); } catch {} }
-  return { store, config };
-}
 function safeReason(s) { return clip(String(s || "사유 없음").replace(/[@`]/g, ""), 350); }
 
 export default async function handler(req, res) {
@@ -90,15 +83,15 @@ export default async function handler(req, res) {
     if (i.type === 1) return reply(res, { type: 1 });
 
 
-    if (i.type === 3 && i.data?.custom_id === "verify:claim") {
+    if (i.type === 3 && i.data?.custom_id?.startsWith("verify:claim:")) {
       if (!i.guild_id) return reply(res, message("서버에서만 인증할 수 있어요.", true));
       background(i, async () => {
-        const { config } = await verificationConfig(i.guild_id);
-        if (!config.role) return { content: "관리자가 /인증설정으로 역할을 먼저 지정해야 해요." };
+        const roleId = i.data.custom_id.split(":")[2];
+        if (!/^\d{15,22}$/.test(roleId || "")) return { content: "인증 역할 정보가 잘못됐어요." };
         const uid = i.member?.user?.id || i.user?.id;
-        if (i.member?.roles?.includes(config.role)) return { content: "이미 인증된 계정이에요." };
-        await discordApi(`/guilds/${i.guild_id}/members/${uid}/roles/${config.role}`, "PUT");
-        return { content: `인증 완료! <@&${config.role}> 역할이 지급됐어요.`, allowed_mentions: { parse: [] } };
+        if (i.member?.roles?.includes(roleId)) return { content: "이미 인증된 계정이에요." };
+        await discordApi(`/guilds/${i.guild_id}/members/${uid}/roles/${roleId}`, "PUT");
+        return { content: `인증 완료! <@&${roleId}> 역할이 지급됐어요.`, allowed_mentions: { parse: [] } };
       });
       return reply(res, { type: 5, data: { flags: 64 } });
     }
@@ -179,36 +172,19 @@ export default async function handler(req, res) {
     const name = i.data?.name;
     if (name === "도움말") return reply(res, { type: 4, data: { embeds: [{ title: "🧀 취즈단봇v2", description: "AI 채팅 · AI 토론 · 서버 관리 · 문의 · 편의 기능\n\n/ai 질문 — Gemini 대화\n/토론 시작 — AI 토론 시작\n토론 메시지의 버튼으로 다음 라운드 또는 종료", color: 0xF1C40F }] } });
 
-    if (name === "인증설정") {
-      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("관리자만 인증 설정을 변경할 수 있어요.", true));
-      background(i, async () => {
-        const roleId = option(i, "역할");
-        const { store, config } = await verificationConfig(i.guild_id);
-        if (!roleId) return { content: `현재 인증 역할: ${config.role ? "<@&" + config.role + ">" : "미설정"}`, allowed_mentions: { parse: [] } };
-        const roles = await discordApi(`/guilds/${i.guild_id}/roles`);
-        const role = roles.find(r => r.id === roleId);
-        if (!role || role.managed || role.id === i.guild_id || (BigInt(role.permissions) & 8n) === 8n) throw new Error("이 역할은 인증용으로 지정할 수 없어요.");
-        const bot = await discordApi(`/guilds/${i.guild_id}/members/${APP_ID}`);
-        const botHighest = Math.max(0, ...roles.filter(r => bot.roles.includes(r.id)).map(r => r.position));
-        if (role.position >= botHighest) throw new Error("인증 역할을 봇의 가장 높은 역할보다 아래에 배치해 줘.");
-        config.role = roleId;
-        const topic = "CHIJU_VERIFY:" + JSON.stringify(config);
-        if (store) await discordApi(`/channels/${store.id}`, "PATCH", { topic });
-        else await discordApi(`/guilds/${i.guild_id}/channels`, "POST", {
-          name: "chiju-verify-config", type: 0, topic,
-          permission_overwrites: [{ id: i.guild_id, type: 0, deny: "1024" }, { id: APP_ID, type: 1, allow: "68608" }]
-        });
-        return { content: `인증 역할 설정 완료: <@&${roleId}>`, allowed_mentions: { parse: [] } };
-      });
-      return reply(res, { type: 5, data: { flags: 64 } });
-    }
-    if (name === "인증패널") {
-      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("관리자만 인증 패널을 만들 수 있어요.", true));
-      const { config } = await verificationConfig(i.guild_id);
-      if (!config.role) return reply(res, message("먼저 /인증설정에서 역할을 지정해 줘.", true));
+    if (name === "인증설정" || name === "인증패널") {
+      if (!i.guild_id || !allowed(i, 8n)) return reply(res, message("관리자만 인증 패널을 설정할 수 있어요.", true));
+      const roleId = option(i, "역할");
+      if (!roleId) return reply(res, message("지급할 인증 역할을 선택해 줘.", true));
+      const roles = await discordApi(`/guilds/${i.guild_id}/roles`);
+      const role = roles.find(r => r.id === roleId);
+      if (!role || role.managed || role.id === i.guild_id || (BigInt(role.permissions) & 8n) === 8n) return reply(res, message("인증용으로 사용할 수 없는 역할이에요.", true));
+      const bot = await discordApi(`/guilds/${i.guild_id}/members/${APP_ID}`);
+      const highest = Math.max(0, ...roles.filter(r => bot.roles.includes(r.id)).map(r => r.position));
+      if (role.position >= highest) return reply(res, message("인증 역할을 봇의 가장 높은 역할보다 아래에 배치해 줘.", true));
       return reply(res, { type: 4, data: {
-        embeds: [{ title: "취즈단 서버 인증", description: "아래 인증하기 버튼을 누르면 서버 인증 역할이 지급됩니다.", color: 0xF1C40F }],
-        components: [{ type: 1, components: [{ type: 2, style: 3, label: "인증하기", custom_id: "verify:claim" }] }]
+        embeds: [{ title: "취즈단 서버 인증", description: "아래 버튼을 누르면 인증 역할이 지급됩니다.", color: 0xF1C40F }],
+        components: [{ type: 1, components: [{ type: 2, style: 3, label: "인증하기", custom_id: `verify:claim:${roleId}` }] }]
       } });
     }
     if (name === "문의설정") {
