@@ -58,6 +58,14 @@ async function discordApi(path, method = "GET", body) {
   if (!r.ok) throw new Error("Discord API " + r.status + ": " + clip(data?.message || txt, 160));
   return data;
 }
+
+async function ticketConfig(guildId, channels) {
+  const list = channels || await discordApi(`/guilds/${guildId}/channels`);
+  const store = list.find(c => c.type === 0 && c.name === "chiju-ticket-config" && c.topic?.startsWith("CHIJU_CONFIG:"));
+  let config = {};
+  if (store) { try { config = JSON.parse(store.topic.slice(13)); } catch {} }
+  return { list, store, config };
+}
 function safeReason(s) { return clip(String(s || "사유 없음").replace(/[@`]/g, ""), 350); }
 
 export default async function handler(req, res) {
@@ -78,15 +86,17 @@ export default async function handler(req, res) {
       background(i, async () => {
         const uid = i.member?.user?.id || i.user?.id;
         if (!uid) throw new Error("사용자 정보를 찾을 수 없어요.");
-        const existing = await discordApi(`/guilds/${i.guild_id}/channels`);
+        const { list: existing, config } = await ticketConfig(i.guild_id);
         const old = existing.find(c => c.type === 0 && c.topic === `CHIJU_TICKET:${uid}`);
         if (old) return { content: `이미 열린 티켓이 있어요: <#${old.id}>`, allowed_mentions: { parse: [] } };
         const channel = await discordApi(`/guilds/${i.guild_id}/channels`, "POST", {
           name: `ticket-${uid.slice(-6)}`, type: 0, topic: `CHIJU_TICKET:${uid}`,
+          ...(config.category ? { parent_id: config.category } : {}),
           permission_overwrites: [
             { id: i.guild_id, type: 0, deny: "1024" },
             { id: uid, type: 1, allow: "68608" },
-            { id: APP_ID, type: 1, allow: "68608" }
+            { id: APP_ID, type: 1, allow: "68608" },
+            ...(config.staff ? [{ id: config.staff, type: 0, allow: "68608" }] : [])
           ]
         });
         await discordApi(`/channels/${channel.id}/messages`, "POST", {
@@ -128,6 +138,34 @@ export default async function handler(req, res) {
     if (i.type !== 2) return reply(res, message("지원하지 않는 요청이에요.", true));
     const name = i.data?.name;
     if (name === "도움말") return reply(res, { type: 4, data: { embeds: [{ title: "🧀 취즈단봇v2", description: "AI 채팅 · AI 토론 · 서버 관리 · 문의 · 편의 기능\n\n/ai 질문 — Gemini 대화\n/토론 시작 — AI 토론 시작\n토론 메시지의 버튼으로 다음 라운드 또는 종료", color: 0xF1C40F }] } });
+    if (name === "문의설정") {
+      if (!i.guild_id || !allowed(i, 16n)) return reply(res, message("채널 관리 권한이 필요해요.", true));
+      background(i, async () => {
+        const { store, config } = await ticketConfig(i.guild_id);
+        const category = option(i, "카테고리");
+        const staff = option(i, "담당역할");
+        if (category) {
+          const ch = await discordApi(`/channels/${category}`);
+          if (ch.guild_id !== i.guild_id || ch.type !== 4) throw new Error("카테고리 채널을 선택해 줘.");
+          config.category = category;
+        }
+        if (staff) {
+          const role = await discordApi(`/guilds/${i.guild_id}/roles`);
+          if (!role.some(r => r.id === staff)) throw new Error("서버에 존재하는 역할을 선택해 줘.");
+          config.staff = staff;
+        }
+        if (category || staff) {
+          const topic = "CHIJU_CONFIG:" + JSON.stringify(config);
+          if (store) await discordApi(`/channels/${store.id}`, "PATCH", { topic });
+          else await discordApi(`/guilds/${i.guild_id}/channels`, "POST", {
+            name: "chiju-ticket-config", type: 0, topic,
+            permission_overwrites: [{ id: i.guild_id, type: 0, deny: "1024" }, { id: APP_ID, type: 1, allow: "68608" }]
+          });
+        }
+        return { content: `🎫 문의 설정 ${category || staff ? "저장 완료" : "조회"}\\n카테고리: ${config.category ? "<#" + config.category + ">" : "미설정"}\\n담당 역할: ${config.staff ? "<@&" + config.staff + ">" : "미설정"}`, allowed_mentions: { parse: [] } };
+      });
+      return reply(res, { type: 5, data: { flags: 64 } });
+    }
     if (name === "문의패널") {
       if (!i.guild_id || !allowed(i, 16n)) return reply(res, message("서버의 채널 관리 권한이 필요해요.", true));
       return reply(res, { type: 4, data: {
