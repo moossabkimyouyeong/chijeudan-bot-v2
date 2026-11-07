@@ -1,6 +1,11 @@
 name: Register Discord slash commands
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/register-commands.mjs'
+      - '.github/workflows/register-commands.yml'
 jobs:
   register:
     runs-on: ubuntu-latest
