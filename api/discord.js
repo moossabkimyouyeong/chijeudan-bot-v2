@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 
 const APP_ID = "1568446216436584518";
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const reply = (res, data) => res.status(200).json(data);
 const message = (content, ephemeral = false) => ({ type: 4, data: { content, ...(ephemeral ? { flags: 64 } : {}) } });
 const option = (i, key) => i.data?.options?.find(o => o.name === key)?.value;
